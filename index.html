@@ -35,6 +35,7 @@
 }
 :root[data-theme="dark"]{
   --blue:#5AACEB;
+  --blue-dark:#0A0D11;
   --blue-text:#8FCBFF;
   --blue-tint:#122536;
   --ink:#ECEDEE;
@@ -4041,8 +4042,10 @@ tickClock();
 setInterval(tickClock, 1000);
 
 /* ============ 到訪人次統計 ============ */
-/* 使用免費公開計數 API（CountAPI），需要網路連線；離線或封鎖時，
-   會改用「本機瀏覽器」的次數作為備援，並註記為本機統計。 */
+/* 原本使用的 countapi.xyz 已經停止服務（網域已失效），
+   改用仍在維護、免簽署的 Abacus 計數 API 作為主要來源，
+   並保留另一個公開計數服務作為次要備援；
+   若兩者都連不上（離線或被封鎖），才會改用「本機瀏覽器」次數，並註記為本機統計。 */
 function paintVisits(n, isLocal){
   var el = document.getElementById("visitCount");
   if(!el) return;
@@ -4057,17 +4060,35 @@ function localVisitFallback(){
   }catch(e){}
   paintVisits(n, true);
 }
+function fetchWithTimeout(url, ms){
+  if(window.AbortController){
+    var ctrl = new AbortController();
+    var timer = setTimeout(function(){ ctrl.abort(); }, ms);
+    return fetch(url, {signal: ctrl.signal}).finally(function(){ clearTimeout(timer); });
+  }
+  return fetch(url);
+}
 function initVisitCounter(){
   var el = document.getElementById("visitCount");
-  if(!el) return;
-  if(!window.fetch){ localVisitFallback(); return; }
-  fetch("https://api.countapi.xyz/hit/emt2-rescue-exam-v2/site-visits")
+  if(!el || !window.fetch){ if(el) localVisitFallback(); return; }
+  var NS = "emt2-rescue-exam-v2", KEY = "site-visits";
+  fetchWithTimeout("https://abacus.jasoncameron.dev/hit/" + NS + "/" + KEY, 4000)
     .then(function(r){ return r.json(); })
     .then(function(data){
-      if(data && typeof data.value === "number") paintVisits(data.value, false);
-      else localVisitFallback();
+      if(data && typeof data.value === "number"){ paintVisits(data.value, false); return; }
+      throw new Error("bad response");
     })
-    .catch(function(){ localVisitFallback(); });
+    .catch(function(){
+      // 主要服務失敗,改嘗試次要的公開計數服務
+      fetchWithTimeout("https://countapi.mileshilliard.com/api/v1/hit/" + NS + "-" + KEY, 4000)
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+          var v = data && (typeof data.value === "number" ? data.value : parseInt(data.value, 10));
+          if(v && !isNaN(v)) paintVisits(v, false);
+          else localVisitFallback();
+        })
+        .catch(function(){ localVisitFallback(); });
+    });
 }
 initVisitCounter();
 
